@@ -48,7 +48,7 @@ static void usage (char *prog)
 {
 	fprintf (stderr, _("Usage: %s [-d debug_flags] [-f] [-F] [-M] [-P] "
 			   "[-p] device [-b|-s|new_size] [-S RAID-stride] "
-			   "[-z undo_file]\n\n"),
+			   "[-z undo_file] [-o mount_point]\n\n"),
 		 prog ? prog : "resize2fs");
 
 	exit (1);
@@ -269,6 +269,7 @@ int main (int argc, char ** argv)
 	unsigned int	blocksize;
 	long		sysval;
 	int		len, mount_flags;
+	int 		force_online = 0;
 	char		*mtpt, *undo_file = NULL;
 	dgrp_t		new_group_desc_count;
 	unsigned long	new_desc_blocks;
@@ -290,7 +291,7 @@ int main (int argc, char ** argv)
 	else
 		usage(NULL);
 
-	while ((c = getopt(argc, argv, "d:fFhMPpS:bsz:")) != EOF) {
+	while ((c = getopt(argc, argv, "d:fFhMPpS:bsz:o:")) != EOF) {
 		switch (c) {
 		case 'h':
 			usage(program_name);
@@ -325,6 +326,9 @@ int main (int argc, char ** argv)
 		case 'z':
 			undo_file = optarg;
 			break;
+		case 'o':
+			force_online = 1;
+			mtpt = optarg;
 		default:
 			usage(program_name);
 		}
@@ -342,28 +346,32 @@ int main (int argc, char ** argv)
 	if (io_options)
 		*io_options++ = 0;
 
-	/*
-	 * Figure out whether or not the device is mounted, and if it is
-	 * where it is mounted.
-	 */
-	len=80;
-	while (1) {
-		mtpt = malloc(len);
-		if (!mtpt)
-			return ENOMEM;
-		mtpt[len-1] = 0;
-		retval = ext2fs_check_mount_point(device_name, &mount_flags,
-						  mtpt, len);
-		if (retval) {
-			com_err("ext2fs_check_mount_point", retval,
-				_("while determining whether %s is mounted."),
-				device_name);
-			exit(1);
+	if (force_online) {
+		mount_flags = EXT2_MF_MOUNTED;
+	} else {
+		/*
+		* Figure out whether or not the device is mounted, and if it is
+		* where it is mounted.
+		*/
+		len=80;
+		while (1) {
+			mtpt = malloc(len);
+			if (!mtpt)
+				return ENOMEM;
+			mtpt[len-1] = 0;
+			retval = ext2fs_check_mount_point(device_name, &mount_flags,
+							mtpt, len);
+			if (retval) {
+				com_err("ext2fs_check_mount_point", retval,
+					_("while determining whether %s is mounted."),
+					device_name);
+				exit(1);
+			}
+			if (!(mount_flags & EXT2_MF_MOUNTED) || (mtpt[len-1] == 0))
+				break;
+			free(mtpt);
+			len = 2 * len;
 		}
-		if (!(mount_flags & EXT2_MF_MOUNTED) || (mtpt[len-1] == 0))
-			break;
-		free(mtpt);
-		len = 2 * len;
 	}
 
 	if (print_min_size)
@@ -667,7 +675,9 @@ int main (int argc, char ** argv)
 				   ((flags & RESIZE_PERCENT_COMPLETE) ?
 				    resize_progress_func : 0));
 	}
-	free(mtpt);
+	if (!force_online) {
+		free(mtpt);
+	}
 	if (retval) {
 		com_err(program_name, retval, _("while trying to resize %s"),
 			device_name);
